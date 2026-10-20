@@ -1,12 +1,76 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from enum import IntEnum
+from typing import List, Dict, Optional, Tuple, Any
 
 # ---- Static map ------------------------------------------------------------
+
+class LaneType(IntEnum):
+    CAR = 0
+    BIKE = 1
+    CARPARK = 2
+
+
+class BoundaryType(IntEnum):
+    LANE_DIVIDER = 0
+    ROAD_DIVIDER = 1
+    ROAD_SIDE = 2
+    VIRTUAL_BOUNDARY = 3
+
+
+class IntersectionType(IntEnum):
+    DEFAULT = 0
+    TRAFFIC_LIGHT = 1
+    STOP_SIGN = 2
+    LANE_BRANCH = 3
+    LANE_MERGE = 4
+    PASS_THROUGH = 5
+
+
+class StopPolygonType(IntEnum):
+    PED_CROSSING = 0
+    STOP_SIGN = 1
+    TRAFFIC_LIGHT = 2
+    TURN_STOP = 3
+    YIELD = 4
+
+
+class TrafficLightFaceType(IntEnum):
+    HORIZONTAL = 0
+    VERTICAL = 1
+
+
+class TrafficLightControlType(IntEnum):
+    INTERSECTION = 0
+    RAILWAY = 1
+    PEDESTRIAN_CROSSING = 2
+    EMERGENCY = 3
+
+
+class TurnType(IntEnum):
+    STRAIGHT = 0
+    LEFT = 1
+    RIGHT = 2
+    U_TURN = 3
+
+
+class BackwardConnectorType(IntEnum):
+    NONE = 0
+    OUTGOING = 1
+    INCOMING = 2
+
+
+class BaselinePathType(IntEnum):
+    AUTO_ON = 0
+    AUTO_OFF = 1
+    NON_AV = 2
+    BIKE = 3
+    AUTO_ON_FALLBACK = 4
+
 
 @dataclass
 class Lane:
     id: int
-    lane_type: int
+    lane_type: LaneType
     polygon: List[List[float]]
     lane_group: Optional[int] = None
     lane_index: Optional[int] = None
@@ -17,7 +81,7 @@ class Lane:
 @dataclass
 class MapBoundary:
     id: List[int]
-    type: str
+    type: BoundaryType
     geometry: List[List[float]]  # [[x, y, z], ...]
 
 
@@ -31,7 +95,7 @@ class Crosswalk:
 @dataclass
 class Intersection:
     id: int
-    intersection_type: int
+    intersection_type: IntersectionType
     boundary_id: List[int]
     geometry: List[List[float]]  # [[x, y, z], ...]
 
@@ -53,7 +117,7 @@ class RoadBlock:
 class TrafficLight:
     id: int
     geometry: List[List[float]]    # [[x, y, z], ...]
-    light_face_control_type: Optional[str] = None
+    light_face_control_type: Optional[TrafficLightControlType] = None
 
 
 @dataclass
@@ -112,6 +176,7 @@ class EgoState:
     pose: Dict[str, float]           # {"x","y","z", "yaw", "qw","qx","qy","qz"}
     velocity: Dict[str, float]       # ego frame
     acceleration: Dict[str, float]
+    dimensions: Dict[str, float]
     trajectory_history: Optional[List[List[float]]] = None
     trajectory_future: Optional[List[List[float]]] = None
 
