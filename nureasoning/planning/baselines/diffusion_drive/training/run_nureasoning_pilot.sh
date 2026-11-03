@@ -5,6 +5,9 @@ set -euo pipefail
 # sample from each. Stage 2 resumes the full Lightning state saved by stage 1.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DEVKIT_ROOT="${NUREASONING_DEVKIT_ROOT:-/path/to/nureasoning-devkit}"
+# Patched DiffusionDrive checkout (9b52ed0 + reference/navsim_nureasoning.patch).
+# Defaults to this folder, which is the case after copying the launchers into the checkout.
+DD_ROOT="${DIFFUSIONDRIVE_ROOT:-$SCRIPT_DIR}"
 TRAIN_ROOT="${NUREASONING_TRAIN_ROOT:-/path/to/nureasoning_training_data}"
 VAL_ROOT="${NUREASONING_VAL_ROOT:-/path/to/nureasoning_testing_data}"
 BASE_EXP_ROOT="${NUREASONING_PILOT_EXP_ROOT:-$SCRIPT_DIR/exp/nureasoning_non_vqa_pilot}"
@@ -27,7 +30,7 @@ stage() {
     printf '\n[non-vqa-pilot] %s\n' "$1"
 }
 
-for required_dir in "$DEVKIT_ROOT/nureasoning" "$TRAIN_ROOT" "$VAL_ROOT"; do
+for required_dir in "$DD_ROOT/navsim" "$DEVKIT_ROOT/nureasoning" "$TRAIN_ROOT" "$VAL_ROOT"; do
     if [[ ! -d "$required_dir" ]]; then
         echo "Required directory does not exist: $required_dir" >&2
         exit 1
@@ -38,13 +41,13 @@ if [[ "$PRECISION" != "32" && "$PRECISION" != "32-true" ]]; then
     exit 1
 fi
 
-cd "$SCRIPT_DIR"
-export NAVSIM_DEVKIT_ROOT="$SCRIPT_DIR"
+cd "$DD_ROOT"
+export NAVSIM_DEVKIT_ROOT="$DD_ROOT"
 export NAVSIM_EXP_ROOT="$RUN_ROOT"
 export OPENSCENE_DATA_ROOT="$TRAIN_ROOT"
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONUNBUFFERED=1
-export PYTHONPATH="$DEVKIT_ROOT:$SCRIPT_DIR/scripts/nureasoning:$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$DEVKIT_ROOT:$SCRIPT_DIR/scripts/nureasoning:$DD_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 stage "Run directory: $RUN_ROOT"
 stage "Caching 40 training clips (one sample per clip)"

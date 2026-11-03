@@ -6,23 +6,16 @@ This folder holds the nuReasoning DiffusionDrive baseline.
 | --- | --- |
 | `model.py` | Inference: registers the `diffusion_drive` planning baseline |
 | `diffusiondrive_nureasoning_modifications.md` | What was changed in DiffusionDrive and the hyperparameters used |
-| `training/navsim/` | Vendored DiffusionDrive `navsim/` package at upstream commit `9b52ed0` with the nuReasoning changes already applied; the launchers run from `training/` and import it |
-| `training/reference/navsim_nureasoning.patch` | The same nuReasoning changes as a patch against upstream DiffusionDrive `9b52ed0`, for review or for rebuilding the checkout from scratch |
+| `training/reference/navsim_nureasoning.patch` | Training-side code changes to the `navsim/` package (about 365 lines, 10 files), as a patch against upstream DiffusionDrive commit `9b52ed0` |
 | `training/scripts/nureasoning/` | Clip converter, cache and anchor generation, validation, benchmark and challenge runners |
 | `training/run_*.sh` | Launchers: `run_training.sh` (4 s, stage 1), `run_training_5s.sh` (5 s fine-tune, stage 2), `run_nureasoning_pilot.sh` (50-clip pilot), `run_official_benchmark_5s.sh` |
 | `training/docs/nureasoning_training_validation.md` | Detailed stage-1 workflow, resume behavior and troubleshooting |
 
-Training needs a DiffusionDrive checkout with the nuReasoning changes applied.
-Inference needs the same checkout, because `model.py` imports its `navsim`
-package. The `training/` folder here is already such a checkout, so you can use
-it directly (set `DIFFUSIONDRIVE_ROOT=$DF/training`) and skip section 1.
+Training needs a DiffusionDrive checkout with the patch applied. Inference
+needs the same checkout, because `model.py` imports its `navsim` package.
 Paths written `/path/to/...` are placeholders to replace.
 
-## 1. Set up the DiffusionDrive checkout (optional)
-
-Only needed if you want a checkout separate from `training/`, for example to
-confirm the patch against a clean upstream tree. Otherwise use `training/`
-as is.
+## 1. Set up the DiffusionDrive checkout
 
 ```bash
 git clone https://github.com/hustvl/DiffusionDrive.git /path/to/DiffusionDrive
@@ -33,6 +26,10 @@ DF=/path/to/nureasoning-devkit/nureasoning/planning/baselines/diffusion_drive
 git apply "$DF/training/reference/navsim_nureasoning.patch"
 cp -r "$DF"/training/scripts "$DF"/training/run_*.sh "$DF"/training/docs .
 ```
+
+The launchers and scripts then run from this checkout. To leave them in the
+devkit folder instead, skip the `cp` and set `DIFFUSIONDRIVE_ROOT` to the
+checkout; the launchers `cd` there and use it for `import navsim`.
 
 Create the `navsim` conda environment by following upstream `docs/install.md`
 (Python 3.9, torch 2.0.1+cu118, pytorch-lightning 2.2.1, nuplan-devkit 1.2.0,

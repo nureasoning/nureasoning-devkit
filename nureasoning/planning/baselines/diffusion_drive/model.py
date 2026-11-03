@@ -7,16 +7,14 @@ of a clip and returns a global-frame ``(N, 3)`` array of ``(x, y, yaw)``
 waypoints at 0.1 s resolution over the 5 s horizon (see
 ``nureasoning.planning.baselines.base.BaseTrajectoryProvider``).
 
-The model definition is the adapted NAVSIM DiffusionDrive code in the
-DiffusionDrive repository, which must be importable (``navsim`` package) and
-needs the ``navsim`` conda environment (torch, nuplan-devkit, diffusers).
-Point ``DIFFUSIONDRIVE_ROOT`` at a working copy of ``training/`` (it also
-provides ``scripts/nureasoning/nureasoning_clip_converter.py``, reused here so
-inference encodes inputs exactly as training did) that contains the nuReasoning
-changes (``trajectory_only``, ``image_pretrained``, ``target_cache_name``,
-pose-count-aware ``TrajectoryHead``, empty-LiDAR fallback); an unmodified
-NAVSIM/DiffusionDrive tree will fail to load the checkpoint. See
-``diffusiondrive_nureasoning_modifications.md`` in this folder.
+The model definition is the adapted NAVSIM DiffusionDrive code, which must be
+importable (``navsim`` package) from a DiffusionDrive checkout at commit
+``9b52ed0`` with ``training/reference/navsim_nureasoning.patch`` applied; an
+unmodified tree will fail to load the checkpoint. Point ``DIFFUSIONDRIVE_ROOT``
+at that checkout. Run in the ``navsim`` conda environment (torch, nuplan-devkit,
+diffusers). The converter ``training/scripts/nureasoning/nureasoning_clip_converter.py``
+is reused from this folder so inference encodes inputs exactly as training did.
+See ``training_and_inference_instructions.md``.
 
 Training-time settings that inference must match (taken from the run's
 ``code/hydra/overrides.yaml``):
@@ -31,7 +29,7 @@ Training-time settings that inference must match (taken from the run's
 Configuration (used when the provider is built without arguments, as
 ``--planning-provider diffusion_drive`` does):
 
-  ``DIFFUSIONDRIVE_ROOT``         DiffusionDrive repo root (required)
+  ``DIFFUSIONDRIVE_ROOT``         patched DiffusionDrive checkout (required)
   ``DIFFUSIONDRIVE_CHECKPOINT``   5 s Lightning checkpoint (required)
   ``DIFFUSIONDRIVE_PLAN_ANCHORS`` 20x10 anchor file the checkpoint was trained
                                   with (required)
@@ -105,7 +103,7 @@ class DiffusionDriveTrajectoryProvider(BaseTrajectoryProvider):
 
         # Heavy / optional dependencies are imported here so that registering
         # the baseline never breaks environments without the NAVSIM stack.
-        scripts_dir = root / "scripts" / "nureasoning"
+        scripts_dir = Path(__file__).resolve().parent / "training" / "scripts" / "nureasoning"
         for entry in (scripts_dir, root):
             if str(entry) not in sys.path:
                 sys.path.insert(0, str(entry))
