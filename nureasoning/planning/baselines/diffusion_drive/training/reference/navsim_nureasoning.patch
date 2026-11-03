@@ -1,0 +1,365 @@
+diff --git a/navsim/agents/diffusiondrive/modules/scheduler.py b/navsim/agents/diffusiondrive/modules/scheduler.py
+index 9f6482e..d875297 100644
+--- a/navsim/agents/diffusiondrive/modules/scheduler.py
++++ b/navsim/agents/diffusiondrive/modules/scheduler.py
+@@ -48,7 +48,8 @@ class WarmupCosLR(_LRScheduler):
+                     / (self.epochs - self.warmup_epochs)
+                 )
+             )
+-        if "lr_scale" in self.optimizer.param_groups[0]:
+-            return [lr * group["lr_scale"] for group in self.optimizer.param_groups]
+-
+-        return [lr for _ in self.optimizer.param_groups]
++        # Scale every optimizer group from its own initial learning rate. This
++        # preserves paramwise learning-rate multipliers (for example the 0.5x
++        # image-backbone group) throughout warmup and cosine decay.
++        scale = lr / self.lr
++        return [base_lr * scale for base_lr in self.base_lrs]
+diff --git a/navsim/agents/diffusiondrive/transfuser_agent.py b/navsim/agents/diffusiondrive/transfuser_agent.py
+index e72bbc2..abb7035 100644
+--- a/navsim/agents/diffusiondrive/transfuser_agent.py
++++ b/navsim/agents/diffusiondrive/transfuser_agent.py
+@@ -54,20 +54,55 @@ class TransfuserAgent(AbstractAgent):
+         self.init_from_pretrained()
+ 
+     def init_from_pretrained(self):
+-        # import ipdb; ipdb.set_trace()
+         if self._checkpoint_path:
+             if torch.cuda.is_available():
+                 checkpoint = torch.load(self._checkpoint_path)
+             else:
+-                checkpoint = torch.load(self._checkpoint_path, map_location=torch.device('cpu'))
++                checkpoint = torch.load(
++                    self._checkpoint_path,
++                    map_location=torch.device('cpu'),
++                )
+             
+             state_dict = checkpoint['state_dict']
+             
+             # Remove 'agent.' prefix from keys if present
+-            state_dict = {k.replace('agent.', ''): v for k, v in state_dict.items()}
++            state_dict = {
++                k.removeprefix('agent.'): v
++                for k, v in state_dict.items()
++            }
++
++            # A warm start may intentionally change the trajectory horizon.
++            # PyTorch's strict=False still raises on tensor shape mismatches,
++            # so retain only tensors that are present and shape-compatible.
++            model_state = self.state_dict()
++            compatible_state = {}
++            incompatible_shapes = {}
++            for key, value in state_dict.items():
++                if key in model_state and model_state[key].shape != value.shape:
++                    incompatible_shapes[key] = (
++                        tuple(value.shape),
++                        tuple(model_state[key].shape),
++                    )
++                    continue
++                compatible_state[key] = value
+             
+             # Load state dict and get info about missing and unexpected keys
+-            missing_keys, unexpected_keys = self.load_state_dict(state_dict, strict=False)
++            missing_keys, unexpected_keys = self.load_state_dict(
++                compatible_state,
++                strict=False,
++            )
++
++            print(
++                f"Loaded {len(compatible_state)} compatible tensors from "
++                f"{self._checkpoint_path}"
++            )
++            if incompatible_shapes:
++                print("Skipped tensors with incompatible shapes:")
++                for key, (checkpoint_shape, model_shape) in sorted(incompatible_shapes.items()):
++                    print(
++                        f"  {key}: checkpoint={checkpoint_shape}, "
++                        f"model={model_shape}"
++                    )
+             
+             if missing_keys:
+                 print(f"Missing keys when loading pretrained weights: {missing_keys}")
+@@ -171,8 +206,8 @@ class TransfuserAgent(AbstractAgent):
+             optimizer=optimizer,
+             lr=self._lr,
+             min_lr=1e-6,
+-            epochs=100,
+-            warmup_epochs=3,
++            epochs=self._config.scheduler_epochs,
++            warmup_epochs=self._config.warmup_epochs,
+         )
+         
+         if 'interval' in scheduler_cfg:
+diff --git a/navsim/agents/diffusiondrive/transfuser_backbone.py b/navsim/agents/diffusiondrive/transfuser_backbone.py
+index a06b699..78e184b 100644
+--- a/navsim/agents/diffusiondrive/transfuser_backbone.py
++++ b/navsim/agents/diffusiondrive/transfuser_backbone.py
+@@ -21,11 +21,19 @@ class TransfuserBackbone(nn.Module):
+         super().__init__()
+         self.config = config
+         try:
+-            self.image_encoder = timm.create_model(config.image_architecture, pretrained=True, features_only=True)
++            self.image_encoder = timm.create_model(
++                config.image_architecture,
++                pretrained=config.image_pretrained,
++                features_only=True,
++            )
+         except Exception as e:
+             print(f"Failed to load image encoder with error: {e}")
+-            self.image_encoder = timm.create_model(config.image_architecture, pretrained=True, features_only=True,
+-                                                   pretrained_cfg_overlay=dict(file=config.bkb_path))
++            self.image_encoder = timm.create_model(
++                config.image_architecture,
++                pretrained=config.image_pretrained,
++                features_only=True,
++                pretrained_cfg_overlay=dict(file=config.bkb_path),
++            )
+         if config.use_ground_plane:
+             in_channels = 2 * config.lidar_seq_len
+         else:
+diff --git a/navsim/agents/diffusiondrive/transfuser_config.py b/navsim/agents/diffusiondrive/transfuser_config.py
+index e5ea9c5..ceeb836 100644
+--- a/navsim/agents/diffusiondrive/transfuser_config.py
++++ b/navsim/agents/diffusiondrive/transfuser_config.py
+@@ -15,11 +15,14 @@ class TransfuserConfig:
+ 
+     image_architecture: str = "resnet34"
+     lidar_architecture: str = "resnet34"
++    image_pretrained: bool = True
+     bkb_path: str = "/home/users/bencheng.liao/.cache/huggingface/hub/checkpoints/resnet34.a1_in1k/pytorch_model.bin"
+     plan_anchor_path: str = "/home/users/bencheng.liao/PlanWrapper/playground/visualization/kmeans_navsim_traj_20.npy"
++    target_cache_name: str = "transfuser_target"
+ 
+     latent: bool = False
+     latent_rad_thresh: float = 4 * np.pi / 9
++    trajectory_only: bool = False
+ 
+     max_height_lidar: float = 100.0
+     pixels_per_meter: float = 4.0
+@@ -87,6 +90,10 @@ class TransfuserConfig:
+     agent_box_weight: float = 1.0
+     bev_semantic_weight: float = 14.0
+     use_ema: bool = False
++
++    # Learning-rate schedule. Keep these aligned with the Trainer epoch count.
++    scheduler_epochs: int = 100
++    warmup_epochs: int = 3
+     # BEV mapping
+     bev_semantic_classes = {
+         1: ("polygon", [SemanticMapLayer.LANE, SemanticMapLayer.INTERSECTION]),  # road
+diff --git a/navsim/agents/diffusiondrive/transfuser_features.py b/navsim/agents/diffusiondrive/transfuser_features.py
+index 5b10392..4047561 100644
+--- a/navsim/agents/diffusiondrive/transfuser_features.py
++++ b/navsim/agents/diffusiondrive/transfuser_features.py
+@@ -82,7 +82,15 @@ class TransfuserFeatureBuilder(AbstractFeatureBuilder):
+         """
+ 
+         # only consider (x,y,z) & swap axes for (N,3) numpy array
+-        lidar_pc = agent_input.lidars[-1].lidar_pc[LidarIndex.POSITION].T
++        # NOTE: nuReasoning data has no lidar for a large fraction of frames
++        # (Lidar.lidar_pc is None in that case) -- fall back to an empty
++        # point cloud so the histogram below naturally comes out all-zero
++        # instead of crashing on NoneType indexing.
++        raw_lidar_pc = agent_input.lidars[-1].lidar_pc
++        if raw_lidar_pc is not None:
++            lidar_pc = raw_lidar_pc[LidarIndex.POSITION].T
++        else:
++            lidar_pc = np.zeros((0, 3), dtype=np.float32)
+ 
+         # NOTE: Code from
+         # https://github.com/autonomousvision/carla_garage/blob/main/team_code/data.py#L873
+@@ -130,14 +138,18 @@ class TransfuserTargetBuilder(AbstractTargetBuilder):
+ 
+     def get_unique_name(self) -> str:
+         """Inherited, see superclass."""
+-        return "transfuser_target"
++        return self._config.target_cache_name
+ 
+     def compute_targets(self, scene: Scene) -> Dict[str, torch.Tensor]:
+         """Inherited, see superclass."""
+ 
+         trajectory = torch.tensor(
+-            scene.get_future_trajectory(num_trajectory_frames=self._config.trajectory_sampling.num_poses).poses
++            scene.get_future_trajectory(num_trajectory_frames=self._config.trajectory_sampling.num_poses).poses,
++            dtype=torch.float32,
+         )
++        if self._config.trajectory_only:
++            return {"trajectory": trajectory}
++
+         frame_idx = scene.scene_metadata.num_history_frames - 1
+         annotations = scene.frames[frame_idx].annotations
+         ego_pose = StateSE2(*scene.frames[frame_idx].ego_status.ego_pose)
+diff --git a/navsim/agents/diffusiondrive/transfuser_loss.py b/navsim/agents/diffusiondrive/transfuser_loss.py
+index d8f708c..3961e99 100644
+--- a/navsim/agents/diffusiondrive/transfuser_loss.py
++++ b/navsim/agents/diffusiondrive/transfuser_loss.py
+@@ -23,6 +23,16 @@ def transfuser_loss(
+         trajectory_loss = predictions["trajectory_loss"]
+     else:
+         trajectory_loss = F.l1_loss(predictions["trajectory"], targets["trajectory"])
++
++    if config.trajectory_only:
++        loss_dict = {
++            "loss": config.trajectory_weight * trajectory_loss,
++            "trajectory_loss": config.trajectory_weight * trajectory_loss,
++        }
++        if "trajectory_loss_dict" in predictions:
++            loss_dict.update(predictions["trajectory_loss_dict"])
++        return loss_dict
++
+     agent_class_loss, agent_box_loss = _agent_loss(targets, predictions, config)
+     bev_semantic_loss = F.cross_entropy(
+         predictions["bev_semantic_map"], targets["bev_semantic_map"].long()
+diff --git a/navsim/agents/diffusiondrive/transfuser_model_v2.py b/navsim/agents/diffusiondrive/transfuser_model_v2.py
+index 789c7d6..8ecbf99 100644
+--- a/navsim/agents/diffusiondrive/transfuser_model_v2.py
++++ b/navsim/agents/diffusiondrive/transfuser_model_v2.py
+@@ -124,16 +124,16 @@ class V2TransfuserModel(nn.Module):
+         query = self._query_embedding.weight[None, ...].repeat(batch_size, 1, 1)
+         query_out = self._tf_decoder(query, keyval)
+ 
+-        bev_semantic_map = self._bev_semantic_head(bev_feature_upscale)
+         trajectory_query, agents_query = query_out.split(self._query_splits, dim=1)
+ 
+-        output: Dict[str, torch.Tensor] = {"bev_semantic_map": bev_semantic_map}
++        output: Dict[str, torch.Tensor] = {}
+ 
+         trajectory = self._trajectory_head(trajectory_query,agents_query, cross_bev_feature,bev_spatial_shape,status_encoding[:, None],targets=targets,global_img=None)
+         output.update(trajectory)
+ 
+-        agents = self._agent_head(agents_query)
+-        output.update(agents)
++        if not self._config.trajectory_only:
++            output["bev_semantic_map"] = self._bev_semantic_head(bev_feature_upscale)
++            output.update(self._agent_head(agents_query))
+ 
+         return output
+ 
+@@ -405,13 +405,19 @@ class TrajectoryHead(nn.Module):
+ 
+ 
+         plan_anchor = np.load(plan_anchor_path)
++        expected_anchor_shape = (self.ego_fut_mode, num_poses, 2)
++        if plan_anchor.shape != expected_anchor_shape:
++            raise ValueError(
++                f"Expected plan anchors with shape {expected_anchor_shape}, "
++                f"but loaded {plan_anchor.shape} from {plan_anchor_path}"
++            )
+ 
+         self.plan_anchor = nn.Parameter(
+             torch.tensor(plan_anchor, dtype=torch.float32),
+             requires_grad=False,
+-        ) # 20,8,2
++        )  # (modes, poses, xy)
+         self.plan_anchor_encoder = nn.Sequential(
+-            *linear_relu_ln(d_model, 1, 1,512),
++            *linear_relu_ln(d_model, 1, 1, num_poses * 64),
+             nn.Linear(d_model, d_model),
+         )
+         self.time_mlp = nn.Sequential(
+diff --git a/navsim/planning/script/config/training/default_training.yaml b/navsim/planning/script/config/training/default_training.yaml
+index e36aa6f..c610547 100644
+--- a/navsim/planning/script/config/training/default_training.yaml
++++ b/navsim/planning/script/config/training/default_training.yaml
+@@ -19,6 +19,14 @@ cache_path: ${oc.env:NAVSIM_EXP_ROOT}/training_cache
+ use_cache_without_dataset: false # load the training samples from the cache. scene-filter will be ignored
+ force_cache_computation: true
+ seed: 0
++resume_checkpoint_path: null  # Lightning checkpoint used to restore the full training state
++
++checkpoint:
++  every_n_train_steps: null  # null keeps Lightning's default epoch checkpointing
++  save_top_k: 3
++  monitor: step
++  mode: max
++  save_last: link
+ 
+ dataloader:
+   params:
+@@ -48,4 +56,4 @@ trainer:
+     # track_grad_norm: -1  # logs the p-norm for inspection
+     gradient_clip_val: 0.0  # value to clip gradients
+     gradient_clip_algorithm: norm  # [value, norm] method to clip gradients
+-    default_root_dir: ${output_dir}
+\ No newline at end of file
++    default_root_dir: ${output_dir}
+\ No newline at end of file
+diff --git a/navsim/planning/script/run_training.py b/navsim/planning/script/run_training.py
+index 692877a..fc78b61 100644
+--- a/navsim/planning/script/run_training.py
++++ b/navsim/planning/script/run_training.py
+@@ -127,14 +127,39 @@ def main(cfg: DictConfig) -> None:
+     val_dataloader = DataLoader(val_data, **cfg.dataloader.params, shuffle=False)
+     logger.info("Num validation samples: %d", len(val_data))
+ 
++    callbacks = agent.get_training_callbacks()
++    checkpoint_cfg = cfg.get("checkpoint")
++    if checkpoint_cfg and checkpoint_cfg.get("every_n_train_steps"):
++        checkpoint_interval = int(checkpoint_cfg.every_n_train_steps)
++        if checkpoint_interval <= 0:
++            raise ValueError("checkpoint.every_n_train_steps must be positive")
++        callbacks.append(
++            pl.callbacks.ModelCheckpoint(
++                dirpath=Path(cfg.output_dir) / "checkpoints",
++                filename="epoch={epoch:03d}-step={step}",
++                auto_insert_metric_name=False,
++                every_n_train_steps=checkpoint_interval,
++                save_top_k=int(checkpoint_cfg.save_top_k),
++                monitor=checkpoint_cfg.get("monitor"),
++                mode=checkpoint_cfg.get("mode", "min"),
++                save_last=checkpoint_cfg.save_last,
++            )
++        )
++        logger.info("Saving a resumable checkpoint every %d training steps", checkpoint_interval)
++
+     logger.info("Building Trainer")
+-    trainer = pl.Trainer(**cfg.trainer.params, callbacks=agent.get_training_callbacks())
++    trainer = pl.Trainer(**cfg.trainer.params, callbacks=callbacks)
++
++    resume_checkpoint_path = cfg.get("resume_checkpoint_path")
++    if resume_checkpoint_path:
++        logger.info("Resuming full training state from checkpoint: %s", resume_checkpoint_path)
+ 
+     logger.info("Starting Training")
+     trainer.fit(
+         model=lightning_module,
+         train_dataloaders=train_dataloader,
+         val_dataloaders=val_dataloader,
++        ckpt_path=resume_checkpoint_path,
+     )
+ 
+ 
+diff --git a/navsim/planning/training/agent_lightning_module.py b/navsim/planning/training/agent_lightning_module.py
+index 9c060d1..e3f665f 100644
+--- a/navsim/planning/training/agent_lightning_module.py
++++ b/navsim/planning/training/agent_lightning_module.py
+@@ -1,5 +1,6 @@
+ import pytorch_lightning as pl
+ 
++import torch
+ from torch import Tensor
+ from typing import Dict, Tuple
+ 
+@@ -30,10 +31,21 @@ class AgentLightningModule(pl.LightningModule):
+         # self.log(f"{logging_prefix}/loss", loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+         # return loss
+         loss_dict = self.agent.compute_loss(features, targets, prediction)
++        loss = loss_dict["loss"]
++        if not torch.isfinite(loss).all():
++            scalar_losses = {
++                name: float(value.detach().cpu())
++                for name, value in loss_dict.items()
++                if torch.is_tensor(value) and value.numel() == 1
++            }
++            raise FloatingPointError(
++                f"Non-finite {logging_prefix} loss at epoch={self.current_epoch}, "
++                f"global_step={self.global_step}: {scalar_losses}"
++            )
+         for k, v in loss_dict.items():
+             if v is not None:
+                 self.log(f"{logging_prefix}/{k}", v, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True, batch_size=len(batch[0]))
+-        return loss_dict['loss']
++        return loss
+ 
+     def training_step(self, batch: Tuple[Dict[str, Tensor], Dict[str, Tensor]], batch_idx: int) -> Tensor:
+         """
