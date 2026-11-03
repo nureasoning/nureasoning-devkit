@@ -13,7 +13,7 @@ The returned trajectory is sampled at 0.1 s from t=0 (inclusive) to the 5 s plan
 | nuVLA (this devkit) | `nureasoning.nuvla.trajectory_provider` | Implemented (train with `python -m nureasoning.nuvla.train`) |
 | Constant velocity | `nureasoning.planning.baselines.constant_velocity` | Implemented (sanity-check lower bound) |
 | UniAD | `nureasoning.planning.baselines.uniad` | Placeholder |
-| DiffusionDrive | `nureasoning.planning.baselines.diffusion_drive` | Placeholder |
+| DiffusionDrive | `nureasoning.planning.baselines.diffusion_drive` | Implemented |
 
 ## Using a baseline
 
